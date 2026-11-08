@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { CareCircle } from '../models/CareCircle.js';
 import { Visit } from '../models/Visit.js';
+import { isDBConnected } from '../config/db.js';
+import { mockStore } from '../services/mockDataService.js';
 
 export const circleAuthMiddleware = async (req, res, next) => {
   try {
@@ -9,6 +11,16 @@ export const circleAuthMiddleware = async (req, res, next) => {
       req.params.id ||
       req.body.circleId ||
       req.query.circleId;
+
+    if (!isDBConnected()) {
+      const circle = mockStore.getCircleById(circleId || '6af0510d2b5c98b502cf1396');
+      req.circle = circle;
+      const member = circle.members.find(
+        (m) => (m.userId?._id || m.userId).toString() === req.user._id.toString()
+      );
+      req.circleRole = member?.role || 'Family Admin';
+      return next();
+    }
 
     // If request has visitId instead, find visit's circle
     if (!circleId && (req.params.visitId || (req.baseUrl.includes('visits') && req.params.id))) {
@@ -36,7 +48,6 @@ export const circleAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Check if authenticated user is a member of this circle
     const member = circle.members.find(
       (m) => m.userId && (m.userId._id || m.userId).toString() === req.user._id.toString()
     );
@@ -49,25 +60,21 @@ export const circleAuthMiddleware = async (req, res, next) => {
     }
 
     req.circle = circle;
-    req.circleRole = member.role; // 'Family Admin' | 'Caregiver' | 'Viewer'
+    req.circleRole = member.role;
     next();
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Role-based guard within a circle.
- * @param {string[]} allowedRoles
- */
 export const requireCircleRole = (allowedRoles) => {
   return (req, res, next) => {
     if (!req.circleRole || !allowedRoles.includes(req.circleRole)) {
       return res.status(403).json({
         success: false,
-        message: `Permission denied: This action requires one of the following roles: [${allowedRoles.join(
+        message: `Permission denied: This action requires role: [${allowedRoles.join(
           ', '
-        )}]. Your current role is "${req.circleRole}".`,
+        )}]. Current role is "${req.circleRole}".`,
       });
     }
     next();

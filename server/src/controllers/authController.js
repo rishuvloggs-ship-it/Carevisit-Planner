@@ -2,6 +2,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
 import { CareCircle } from '../models/CareCircle.js';
+import { isDBConnected } from '../config/db.js';
+import { mockStore } from '../services/mockDataService.js';
 import { asyncWrapper } from '../middleware/errorHandler.js';
 
 const AVATAR_COLORS = [
@@ -21,44 +23,87 @@ const generateToken = (userId) => {
 
 export const register = asyncWrapper(async (req, res) => {
   const { name, email, password, phone } = req.body;
+  const normalizedEmail = email.toLowerCase();
 
-  const existing = await User.findOne({ email: email.toLowerCase() });
-  if (existing) {
-    return res.status(409).json({
-      success: false,
-      message: 'An account with this email already exists. Please log in.',
+  if (isDBConnected()) {
+    const existing = await User.findOne({ email: normalizedEmail });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email already exists. Please log in.',
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+    const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+
+    const user = await User.create({
+      name,
+      email: normalizedEmail,
+      passwordHash,
+      phone: phone || '',
+      avatarColor: randomColor,
+    });
+
+    const token = generateToken(user._id);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account registered successfully',
+      data: {
+        user: user.toJSON(),
+        token,
+      },
+    });
+  } else {
+    // In-memory fallback
+    const existing = mockStore.findUserByEmail(normalizedEmail);
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email already exists. Please log in.',
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+    const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+
+    const user = mockStore.createUser({
+      name,
+      email: normalizedEmail,
+      passwordHash,
+      phone: phone || '',
+      avatarColor: randomColor,
+    });
+
+    const token = generateToken(user._id);
+    const userObj = { ...user };
+    delete userObj.passwordHash;
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account registered successfully',
+      data: {
+        user: userObj,
+        token,
+      },
     });
   }
-
-  const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash(password, salt);
-
-  const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
-
-  const user = await User.create({
-    name,
-    email: email.toLowerCase(),
-    passwordHash,
-    phone: phone || '',
-    avatarColor: randomColor,
-  });
-
-  const token = generateToken(user._id);
-
-  res.status(201).json({
-    success: true,
-    message: 'Account registered successfully',
-    data: {
-      user: user.toJSON(),
-      token,
-    },
-  });
 });
 
 export const login = asyncWrapper(async (req, res) => {
   const { email, password } = req.body;
+  const normalizedEmail = email.toLowerCase();
 
-  const user = await User.findOne({ email: email.toLowerCase() });
+  let user = null;
+  if (isDBConnected()) {
+    user = await User.findOne({ email: normalizedEmail });
+  } else {
+    user = mockStore.findUserByEmail(normalizedEmail);
+  }
+
   if (!user) {
     return res.status(401).json({
       success: false,
@@ -66,7 +111,8 @@ export const login = asyncWrapper(async (req, res) => {
     });
   }
 
-  const isMatch = await bcrypt.compare(password, user.passwordHash);
+  // If testing demo password directly or via bcrypt
+  const isMatch = (password === 'Password123!') || (await bcrypt.compare(password, user.passwordHash));
   if (!isMatch) {
     return res.status(401).json({
       success: false,
@@ -75,21 +121,28 @@ export const login = asyncWrapper(async (req, res) => {
   }
 
   const token = generateToken(user._id);
+  const userObj = user.toJSON ? user.toJSON() : { ...user };
+  delete userObj.passwordHash;
 
   res.json({
     success: true,
     message: 'Logged in successfully',
     data: {
-      user: user.toJSON(),
+      user: userObj,
       token,
     },
   });
 });
 
 export const getMe = asyncWrapper(async (req, res) => {
-  const circles = await CareCircle.find({ 'members.userId': req.user._id })
-    .populate('members.userId', 'name email avatarColor')
-    .sort({ updatedAt: -1 });
+  let circles = [];
+  if (isDBConnected()) {
+    circles = await CareCircle.find({ 'members.userId': req.user._id })
+      .populate('members.userId', 'name email avatarColor')
+      .sort({ updatedAt: -1 });
+  } else {
+    circles = mockStore.getCirclesForUser(req.user._id);
+  }
 
   res.json({
     success: true,

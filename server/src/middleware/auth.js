@@ -1,5 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
+import { isDBConnected } from '../config/db.js';
+import { mockStore } from '../services/mockDataService.js';
 
 export const authMiddleware = async (req, res, next) => {
   try {
@@ -15,7 +17,13 @@ export const authMiddleware = async (req, res, next) => {
     const secret = process.env.JWT_SECRET || 'carevisit-super-secret-jwt-token-2026-key';
 
     const decoded = jwt.verify(token, secret);
-    const user = await User.findById(decoded.userId).select('-passwordHash');
+    let user = null;
+
+    if (isDBConnected()) {
+      user = await User.findById(decoded.userId).select('-passwordHash');
+    } else {
+      user = mockStore.findUserById(decoded.userId);
+    }
 
     if (!user) {
       return res.status(401).json({
@@ -24,7 +32,9 @@ export const authMiddleware = async (req, res, next) => {
       });
     }
 
-    req.user = user;
+    const userObj = user.toJSON ? user.toJSON() : { ...user };
+    delete userObj.passwordHash;
+    req.user = userObj;
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
