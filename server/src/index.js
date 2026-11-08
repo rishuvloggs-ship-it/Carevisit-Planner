@@ -1,5 +1,5 @@
 import app from './app.js';
-import { connectDB } from './config/db.js';
+import { connectDB, isDBConnected } from './config/db.js';
 import { User } from './models/User.js';
 import { seedDatabase } from './seed.js';
 
@@ -9,11 +9,17 @@ const startServer = async () => {
   try {
     await connectDB();
     
-    // Auto-seed if database is currently empty
-    const userCount = await User.countDocuments();
-    if (userCount === 0) {
-      console.log('[Server] Database is empty, seeding demo data automatically...');
-      await seedDatabase();
+    // Auto-seed only if MongoDB is actually connected and empty
+    if (isDBConnected()) {
+      try {
+        const userCount = await User.countDocuments().maxTimeMS(1500);
+        if (userCount === 0) {
+          console.log('[Server] MongoDB is empty, seeding demo data automatically...');
+          await seedDatabase();
+        }
+      } catch (err) {
+        console.warn('[Server] DB count check bypassed:', err.message);
+      }
     }
 
     app.listen(PORT, () => {
@@ -21,8 +27,11 @@ const startServer = async () => {
       console.log(`[Server] Health check: http://localhost:${PORT}/api/health`);
     });
   } catch (err) {
-    console.error('[Server] Fatal startup error:', err);
-    process.exit(1);
+    console.error('[Server] Startup error:', err);
+    // Continue running app even on DB init error
+    app.listen(PORT, () => {
+      console.log(`[Server] Backend listening in resilient fallback mode on port ${PORT}`);
+    });
   }
 };
 

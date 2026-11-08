@@ -2,8 +2,9 @@ import mongoose from 'mongoose';
 
 let memoryServer = null;
 
-// Prevent 10,000ms buffering hang when disconnected
-mongoose.set('bufferTimeoutMS', 2500);
+// COMPLETELY DISABLE QUERY BUFFERING: Mongoose will NEVER hang for 10000ms
+mongoose.set('bufferCommands', false);
+mongoose.set('bufferTimeoutMS', 1500);
 
 export const isDBConnected = () => mongoose.connection.readyState === 1;
 
@@ -12,9 +13,9 @@ export const connectDB = async () => {
 
   const uri = process.env.MONGODB_URI;
 
-  // If no cloud MONGODB_URI is provided or if in serverless environment without mongod
-  if (!uri && process.env.VERCEL) {
-    console.log('[Database] Running on Vercel Serverless without MONGODB_URI. Using resilient in-memory data store.');
+  // In Vercel serverless without an external MongoDB Atlas cluster
+  if (!uri && (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
+    console.log('[Database] Cloud serverless environment detected without external MONGODB_URI. Using resilient in-memory data store.');
     return;
   }
 
@@ -22,25 +23,27 @@ export const connectDB = async () => {
 
   try {
     await mongoose.connect(targetUri, {
-      serverSelectionTimeoutMS: 2500,
+      serverSelectionTimeoutMS: 2000,
+      bufferCommands: false,
     });
     console.log(`[Database] MongoDB connected successfully to: ${targetUri}`);
   } catch (err) {
     console.warn(`[Database] Standard MongoDB connection failed (${err.message}).`);
     
-    // Only attempt memoryServer if not in serverless environment
+    // In local non-serverless mode, attempt in-memory server
     if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
       try {
         const { MongoMemoryServer } = await import('mongodb-memory-server');
         memoryServer = await MongoMemoryServer.create();
         const memoryUri = memoryServer.getUri();
-        await mongoose.connect(memoryUri);
+        await mongoose.connect(memoryUri, {
+          serverSelectionTimeoutMS: 2000,
+          bufferCommands: false,
+        });
         console.log(`[Database] In-memory MongoDB connected successfully at: ${memoryUri}`);
       } catch (memErr) {
         console.warn('[Database] In-memory MongoDB daemon not available. Falling back to internal mock data store.');
       }
-    } else {
-      console.log('[Database] Cloud serverless environment detected. Using resilient in-memory data store.');
     }
   }
 };

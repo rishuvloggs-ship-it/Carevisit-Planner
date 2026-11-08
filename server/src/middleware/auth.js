@@ -20,8 +20,14 @@ export const authMiddleware = async (req, res, next) => {
     let user = null;
 
     if (isDBConnected()) {
-      user = await User.findById(decoded.userId).select('-passwordHash');
-    } else {
+      try {
+        user = await User.findById(decoded.userId).select('-passwordHash').maxTimeMS(1500);
+      } catch (e) {
+        user = null;
+      }
+    }
+
+    if (!user) {
       user = mockStore.findUserById(decoded.userId);
     }
 
